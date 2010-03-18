@@ -40,10 +40,10 @@ class ProofEnv(val idInClauseForVar: Map[Variable, Variable], val env: Env) {
    * @return 引数で与えられた項(変数)に対応する内部変数と環境の組
    */
   def apply(term: Term): TermInstance = term match {
-    case v @ Variable(_, _, _) => idInClauseForVar.get(v) match {
-      case None => TermInstance(term, env)
-      case Some(v) => env.dereference(v)
-    }
+    case v @ Variable(_, _, _) => 
+      idInClauseForVar.get(v) map { 
+        env.dereference(_) 
+      } getOrElse TermInstance(term, env)
     case _ => TermInstance(term, env)
   }
 

@@ -83,29 +83,32 @@ object Env {
    * @param backpoint カット後の戻り位置となる継続
    */
   private class EnvImpl(size: Int, backpoint: List[Command]) extends Env(backpoint) {
-    /** 代入。インデックスがvariable.idInClauseの要素にその変数への適用結果が格納される。 */
+    /**
+     * 代入。インデックスがvariable.idInClauseの要素にその変数への適用結果が格納される。
+     */
     private var subst = new Array[TermInstance](size)
 
     override def toString(): String = {
-      "%x".format(hashCode) + subst.filter(_ != null).map{ case TermInstance(rep, env) => rep.toSignatureString() + "@" + "%x".format(env.hashCode) }.mkString("(", ", ", ")")
+      "%x".format(hashCode) + subst.filter(_ != null).map{ 
+         case TermInstance(rep, env) => 
+           rep.toSignatureString() + "@" + "%x".format(env.hashCode) 
+      }.mkString("(", ", ", ")")
     }
-    override def apply(variable: Variable): Option[TermInstance] = {
-      val te = subst(variable.idInClause)
-      if (te == null) {
-        None
-      } else {
-        Some(te)
-      }
-    }
-    override def update(variable: Variable, representation: TermInstance): Unit = subst(variable.idInClause) = representation
+
+    override def apply(variable: Variable): Option[TermInstance] = 
+      Option(subst(variable.idInClause))
+
+    override def update(variable: Variable, representation: TermInstance): Unit = 
+      subst(variable.idInClause) = representation
+
     override def delete(variable: Variable): Unit = subst(variable.idInClause) = null
 
     override def dereference(term: Term): TermInstance = {
       def repRec(term: Term, env: Env): TermInstance = term match {
-        case v @ Variable(_, _, _) => env(v) match {
-          case None => TermInstance(term, env)
-          case Some(TermInstance(t, e)) => repRec(t, e)
-        }
+        case v @ Variable(_, _, _) => 
+          env(v) map { case TermInstance(t, e) => repRec(t, e) } getOrElse {
+            TermInstance(term, env)
+          }
         case _ => TermInstance(term, env)
       }
       repRec(term, this)

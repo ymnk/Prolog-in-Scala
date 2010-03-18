@@ -28,6 +28,12 @@ package prolog
 /**
  * 処理
  */
+object Command{
+  type Callback = (ProofEnv, List[Command]) => Unit
+}
+
+import Command.Callback
+
 sealed abstract class Command {
   /**
    * 処理を実行する。
@@ -38,7 +44,10 @@ sealed abstract class Command {
    * @param callback 探索に成功したときに呼び出される処理
    * @return 処理後の継続
    */
-  def execute(remainingCommands: List[Command], initialEnv: ProofEnv, initialVariableTrail: VariableTrail, callback: (ProofEnv, List[Command]) => Unit): List[Command]
+  def execute(remainingCommands: List[Command], 
+              initialEnv: ProofEnv, 
+              initialVariableTrail: VariableTrail, 
+              callback: Callback): List[Command]
 }
 
 /**
@@ -48,7 +57,9 @@ sealed abstract class Command {
  * @param remainingClauses 先頭ゴールに適用するルールの残り
  * @param trail 環境に対して行う変更の記録先
  */
-final case class Search(goals: List[TermInstance], remainingClauses: List[Clause], trail: VariableTrail) extends Command {
+final case class Search(goals: List[TermInstance], 
+                        remainingClauses: List[Clause], 
+                        trail: VariableTrail) extends Command {
   /**
    * 探索する。
    *
@@ -58,14 +69,18 @@ final case class Search(goals: List[TermInstance], remainingClauses: List[Clause
    * @param callback 探索に成功したときに呼び出される処理
    * @return 処理後の継続
    */
-  override def execute(remainingCommands: List[Command], initialEnv: ProofEnv, initialVariableTrail: VariableTrail, callback: (ProofEnv, List[Command]) => Unit): List[Command] = {
+  override def execute(remainingCommands: List[Command], 
+                       initialEnv: ProofEnv, 
+                       initialVariableTrail: VariableTrail, 
+                       callback: Callback): List[Command] = {
     goals match {
       case Nil =>
         // 解を発見した。
         callback(initialEnv, remainingCommands)
         remainingCommands
       case goals @ (TermInstance(goal, env) :: remainingGoals) =>
-        goal.execute(goals, env, trail, remainingGoals, remainingClauses, remainingCommands)
+        goal.execute(goals, env, trail, remainingGoals, 
+                     remainingClauses, remainingCommands)
     }
   }
 
@@ -95,7 +110,10 @@ final case class Rollback(trail: VariableTrail) extends Command {
    * @param callback 探索に成功したときに呼び出される処理
    * @return 処理後の継続
    */
-  override def execute(remainingCommands: List[Command], initialEnv: ProofEnv, initialVariableTrail: VariableTrail, callback: (ProofEnv, List[Command]) => Unit): List[Command] = {
+  override def execute(remainingCommands: List[Command], 
+                       initialEnv: ProofEnv, 
+                       initialVariableTrail: VariableTrail, 
+                       callback: Callback) = {
     trail.rollback()  // 環境に対して行われた変更を元に戻す。
     remainingCommands // 処理を継続する。
   }
@@ -116,7 +134,10 @@ final case class Trace(terms: List[Term], env: Env) extends Command {
    * @param callback 探索に成功したときに呼び出される処理
    * @return 処理後の継続
    */
-  override def execute(remainingCommands: List[Command], initialEnv: ProofEnv, initialVariableTrail: VariableTrail, callback: (ProofEnv, List[Command]) => Unit): List[Command] = {
+  override def execute(remainingCommands: List[Command], 
+                       initialEnv: ProofEnv, 
+                       initialVariableTrail: VariableTrail, 
+                       callback: Callback): List[Command] = {
     println(terms.mkString("", ", ", ""))
     println(remainingCommands.mkString(" ::\n"))
     println("  env: " + initialEnv)

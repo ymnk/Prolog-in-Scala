@@ -25,6 +25,8 @@
  */
 package prolog
 
+import collection.mutable.HashMap
+
 /**
  * Prolog環境
  */
@@ -32,6 +34,7 @@ trait Prolog {
   import Term._
   import Clause._
   import error._
+  import Command.Callback
 
   /**
    * 解を探索する。
@@ -39,22 +42,19 @@ trait Prolog {
    * @param goals ゴール
    * @param callback 探索に成功したときに呼び出される処理
    */
-  def prove(goals: Term*)(callback: (ProofEnv, List[Command]) => Unit): Unit = {
-    var idInClauseForVar = new scala.collection.mutable.HashMap[Variable, Variable]
+  def prove(goals: Term*)(callback: Callback): Unit = {
+    var idInClauseForVar = new HashMap[Variable, Variable]
     val newGoals = goals.map{ _.assignIdInClauseToVar(idInClauseForVar) }
     val initialVariableTrail = VariableTrail()
     val initialEnv = Env(idInClauseForVar.size, Rollback(initialVariableTrail) :: Nil)
     val initialProofEnv = new ProofEnv(Map.empty ++ idInClauseForVar, initialEnv)
     val goalList = newGoals.toList
     evaluate(
-      Search(goalList.map(g => TermInstance(g, initialEnv)),
-          goalList match {
-            case Nil => Nil
-            case goal :: _ => goal.clauses
-          },
-        initialVariableTrail) ::
-        Rollback(initialVariableTrail) :: Nil,
-        initialProofEnv, initialVariableTrail, callback)
+      Search(
+        goalList.map(TermInstance(_, initialEnv)),
+        goalList.headOption.map{_.clauses} getOrElse Nil,
+        initialVariableTrail) :: Rollback(initialVariableTrail) :: Nil,
+      initialProofEnv, initialVariableTrail, callback)
   }
 
   /**
@@ -66,12 +66,18 @@ trait Prolog {
    * @param callback 探索に成功したときに呼び出される処理
    * @return 処理後の継続
    */
-  final def evaluate(initialCommands: List[Command], initialEnv: ProofEnv, initialVariableTrail: VariableTrail, callback: (ProofEnv, List[Command]) => Unit) :Unit = {
+  final def evaluate(initialCommands: List[Command], 
+                     initialEnv: ProofEnv, 
+                     initialVariableTrail: VariableTrail, 
+                     callback: Callback) :Unit = {
     def evaluate(commands: List[Command]): Unit = {
       commands match {
         case command :: remainingCommands =>
           // 処理を実行する。
-          evaluate(command.execute(remainingCommands, initialEnv, initialVariableTrail, callback))
+          evaluate(command.execute(remainingCommands, 
+                                   initialEnv, 
+                                   initialVariableTrail, 
+                                   callback))
         case Nil => ; // 処理完了
       }
     }
@@ -79,20 +85,25 @@ trait Prolog {
   }
 
   /** スタックトレースを出力する。 */
-  val TRACE = PredefAtom("trace", (atom, arguments, goals, env, trail, remainingGoals, remainingClauses, remainingCommands) => {
+  val TRACE = PredefAtom("trace", 
+                         (atom, arguments, goals, env, trail, remainingGoals, 
+                          remainingClauses, remainingCommands) => {
     Trace(arguments, env) ::
-      Search(remainingGoals, clausesToBePossible(remainingGoals), trail) /* 次のゴールへ移る。 */ ::
-      remainingCommands
+    Search(remainingGoals, clausesToBePossible(remainingGoals), trail) /* 次のゴールへ移る。 */ ::
+    remainingCommands
   })
 
   /** 単一化する述語 */
-  val UNIFY = PredefAtom("=", (atom, arguments, _, env, trail, remainingGoals, _, remainingCommands) =>
+  val UNIFY = PredefAtom("=", 
+                         (atom, arguments, _, env, trail, remainingGoals, _, 
+                          remainingCommands) =>
     arguments match {
       // 単一化
       case lhs :: rhs :: Nil => {
         val (succeed, newChangedVariables) = unifyAll(lhs, env, rhs, env)
         if (succeed) {
-          val newTrail = trail.createCheckPoint(newChangedVariables)  // 状態のロールバックはremainingCommandsの先頭にあるRollbackで行われる。
+          // 状態のロールバックはremainingCommandsの先頭にあるRollbackで行われる。
+          val newTrail = trail.createCheckPoint(newChangedVariables)
           Search(remainingGoals, clausesToBePossible(remainingGoals), newTrail) /* 次のゴールへ移る。 */ :: remainingCommands
         } else {
           remainingCommands // バックトラック
@@ -102,16 +113,20 @@ trait Prolog {
     })
 
   /** 引数を取得する述語 */
-  val ARG = PredefAtom("arg", (atom, arguments, _, env, trail, remainingGoals, _, remainingCommands) =>
+  val ARG = PredefAtom("arg", 
+                       (atom, arguments, _, env, trail, remainingGoals, _, 
+                       remainingCommands) =>
     arguments match {
       case num :: term :: result :: Nil =>
         (env.dereference(num), env.dereference(term)) match {
-          case (TermInstance(Num(index), _), TermInstance(Compound(functor, terms), termsEnv)) => {
+          case (TermInstance(Num(index), _), 
+                TermInstance(Compound(functor, terms), termsEnv)) => {
             if (index > 0 && index <= terms.size) {
               val elem = terms(index - 1)
               val (succeed, newChangedVariables) = unifyAll(result, env, elem, termsEnv)
               if (succeed) {
-                val newTrail = trail.createCheckPoint(newChangedVariables)  // 状態のロールバックはremainingCommandsの先頭にあるRollbackで行われる。
+                // 状態のロールバックはremainingCommandsの先頭にあるRollbackで行われる。
+                val newTrail = trail.createCheckPoint(newChangedVariables)
                 Search(remainingGoals, clausesToBePossible(remainingGoals), newTrail) /* 次のゴールへ移る。 */ :: remainingCommands
               } else {
                 remainingCommands // バックトラック
@@ -126,13 +141,16 @@ trait Prolog {
     })
 
   /** 数式を評価する述語 */
-  val IS = PredefAtom("is", (atom, arguments, _, env, trail, remainingGoals, _, remainingCommands) =>
+  val IS = PredefAtom("is", 
+                      (atom, arguments, _, env, trail, remainingGoals, _, 
+                      remainingCommands) =>
     arguments match {
       case term :: expr :: Nil =>
         val result = Num(calc(expr, env))
         val (succeed, newChangedVariables) = unifyAll(term, env, result, env)
         if (succeed) {
-          val newTrail = trail.createCheckPoint(newChangedVariables)  // 状態のロールバックはremainingCommandsの先頭にあるRollbackで行われる。
+          // 状態のロールバックはremainingCommandsの先頭にあるRollbackで行われる。
+          val newTrail = trail.createCheckPoint(newChangedVariables)
           Search(remainingGoals, clausesToBePossible(remainingGoals), newTrail) /* 次のゴールへ移る。 */ :: remainingCommands
         } else {
           remainingCommands // バックトラック
@@ -140,129 +158,81 @@ trait Prolog {
       case _ => throw new SyntaxError("Unbalanced operator '%s'.".format(atom.name))
     })
 
+
+  private def op_one(name:String, op:(Term, Env)=>Boolean) = 
+    PredefAtom(name,
+               {
+                 case (atom, term :: Nil, _, env, trail, 
+                       remainingGoals, _, remainingCommands) =>
+                    if (op(term, env))
+                      Search(remainingGoals, 
+                             clausesToBePossible(remainingGoals), 
+                             trail) :: remainingCommands // 次のゴールへ移る。
+                    else
+                      remainingCommands // バックトラック
+	         case (atom, _,_,_,_,_,_,_) => 
+                    throw new SyntaxError("Unbalanced operator '%s'.".format(atom.name))
+	       })
+
+  private def op_two(name:String, op:(Term, Term, Env)=>Boolean) = 
+    PredefAtom(name, 
+               {
+                 case (atom, lhs :: rhs :: Nil, _, env, trail, 
+                       remainingGoals, _, remainingCommands) =>
+                    if (op(lhs, rhs, env))
+                      Search(remainingGoals, 
+                             clausesToBePossible(remainingGoals), 
+                             trail) :: remainingCommands // 次のゴールへ移る。
+                    else
+                      remainingCommands // バックトラック
+	         case (atom, _,_,_,_,_,_,_) => 
+                    throw new SyntaxError("Unbalanced operator '%s'.".format(atom.name))
+	       })
+
   /** 数式を評価し、同値を判定する述語 */
-  val EQ = PredefAtom("=:=", (atom, arguments, _, env, trail, remainingGoals, _, remainingCommands) =>
-    arguments match {
-      case lhs :: rhs :: Nil => {
-        if (calc(lhs, env) == calc(rhs, env))
-          Search(remainingGoals, clausesToBePossible(remainingGoals), trail) :: remainingCommands // 次のゴールへ移る。
-        else
-          remainingCommands // バックトラック
-      }
-      case _ => throw new SyntaxError("Unbalanced operator '%s'.".format(atom.name))
-    })
+  val EQ = op_two("=:=", 
+                  (l:Term, r:Term, env:Env) => calc(l, env) == calc(r, env))
 
   /** 数式を評価し、非同値を判定する述語 */
-  val NE = PredefAtom("=\\=", (atom, arguments, _, env, trail, remainingGoals, _, remainingCommands) =>
-    arguments match {
-      case lhs :: rhs :: Nil => {
-        if (calc(lhs, env) != calc(rhs, env))
-          Search(remainingGoals, clausesToBePossible(remainingGoals), trail) :: remainingCommands // 次のゴールへ移る。
-        else
-          remainingCommands // バックトラック
-      }
-      case _ => throw new SyntaxError("Unbalanced operator '%s'.".format(atom.name))
-    })
+  val NE = op_two("=\\=",
+                  (l:Term, r:Term, env:Env) => calc(l, env) != calc(r, env))
 
   /** 数式を評価し、以上を判定する述語 */
-  val GE = PredefAtom(">=", (atom, arguments, _, env, trail, remainingGoals, _, remainingCommands) =>
-    arguments match {
-      case lhs :: rhs :: Nil => {
-        if (calc(lhs, env) >= calc(rhs, env))
-          Search(remainingGoals, clausesToBePossible(remainingGoals), trail) :: remainingCommands // 次のゴールへ移る。
-        else
-          remainingCommands // バックトラック
-      }
-      case _ => throw new SyntaxError("Unbalanced operator '%s'.".format(atom.name))
-    })
+  val GE = op_two(">=", 
+                  (l:Term, r:Term, env:Env) => calc(l, env) >= calc(r, env))
 
   /** 数式を評価し、超過を判定する述語 */
-  val GT = PredefAtom(">", (atom, arguments, _, env, trail, remainingGoals, _, remainingCommands) =>
-    arguments match {
-      case lhs :: rhs :: Nil => {
-        if (calc(lhs, env) > calc(rhs, env))
-          Search(remainingGoals, clausesToBePossible(remainingGoals), trail) :: remainingCommands // 次のゴールへ移る。
-        else
-          remainingCommands // バックトラック
-      }
-      case _ => throw new SyntaxError("Unbalanced operator '%s'.".format(atom.name))
-    })
+  val GT = op_two(">",
+                  (l:Term, r:Term, env:Env) => calc(l, env) > calc(r, env))
 
   /** 数式を評価し、以下を判定する述語 */
-  val LE = PredefAtom("<=", (atom, arguments, _, env, trail, remainingGoals, _, remainingCommands) =>
-    arguments match {
-      case lhs :: rhs :: Nil => {
-        if (calc(lhs, env) <= calc(rhs, env))
-          Search(remainingGoals, clausesToBePossible(remainingGoals), trail) :: remainingCommands // 次のゴールへ移る。
-        else
-          remainingCommands // バックトラック
-      }
-      case _ => throw new SyntaxError("Unbalanced operator '%s'.".format(atom.name))
-    })
+  val LE = op_two("<=",
+                  (l:Term, r:Term, env:Env) => calc(l, env) <= calc(r, env))
 
   /** 数式を評価し、未満を判定する述語 */
-  val LT = PredefAtom("<", (atom, arguments, _, env, trail, remainingGoals, _, remainingCommands) =>
-    arguments match {
-      case lhs :: rhs :: Nil => {
-        if (calc(lhs, env) < calc(rhs, env))
-          Search(remainingGoals, clausesToBePossible(remainingGoals), trail) :: remainingCommands // 次のゴールへ移る。
-        else
-          remainingCommands // バックトラック
-      }
-      case _ => throw new SyntaxError("Unbalanced operator '%s'.".format(atom.name))
-    })
+  val LT = op_two("<",
+                  (l:Term, r:Term, env:Env) => calc(l, env) < calc(r, env))
 
   /** 変数であることを判定する述語 */
-  val VAR = PredefAtom("var", (atom, arguments, _, env, trail, remainingGoals, _, remainingCommands) =>
-    arguments match {
-      case term :: Nil => {
-        if (isVar(term, env))
-          Search(remainingGoals, clausesToBePossible(remainingGoals), trail) :: remainingCommands // 次のゴールへ移る。
-        else
-          remainingCommands // バックトラック
-      }
-      case _ => throw new RuntimeException("Undefined procedure '%s'.".format(atom.name))
-    })
+  val VAR = op_one("var", (term:Term, env:Env) => isVar(term, env))
 
   /** 変数でないことを判定する述語 */
-  val NONVAR = PredefAtom("nonvar", (atom, arguments, _, env, trail, remainingGoals, _, remainingCommands) =>
-    arguments match {
-      case term :: Nil => {
-        if (isNonvar(term, env))
-          Search(remainingGoals, clausesToBePossible(remainingGoals), trail) :: remainingCommands // 次のゴールへ移る。
-        else
-          remainingCommands // バックトラック
-      }
-      case _ => throw new RuntimeException("Undefined procedure '%s'.".format(atom.name))
-    })
+  val NONVAR = op_one("nonvar", (term:Term, env:Env) => isNonvar(term, env))
 
   /** 数値であることを判定する述語 */
-  val NUM = PredefAtom("num", (atom, arguments, _, env, trail, remainingGoals, _, remainingCommands) =>
-    arguments match {
-      case term :: Nil => {
-        if (isNum(term, env))
-          Search(remainingGoals, clausesToBePossible(remainingGoals), trail) :: remainingCommands // 次のゴールへ移る。
-        else
-          remainingCommands // バックトラック
-      }
-      case _ => throw new RuntimeException("Undefined procedure '%s'.".format(atom.name))
-    })
+  val NUM = op_one("num", (term:Term, env:Env) => isNum(term, env))
 
   /** 標準出力に項の内容を出力する述語 */
-  val WRITE = PredefAtom("write", (atom, arguments, _, env, trail, remainingGoals, _, remainingCommands) =>
-    arguments match {
-      case term :: Nil =>
-        println(term.toString(env))
-        Search(remainingGoals, clausesToBePossible(remainingGoals), trail) :: remainingCommands /* 次のゴールへ移る。 */
-      case _ =>
-        throw new RuntimeException("Undefined procedure '%s'.".format(atom.name))
-    }
-  )
+  val WRITE = op_one("write", (term:Term, env:Env) => {println(term.toString(env));true})
 
   /** 定義済みアトムtrue */
-  val TRUE = PredefAtom("true", (atom, arguments, _, _, trail, remainingGoals, _, remainingCommands) =>
+  val TRUE = PredefAtom("true", 
+                        (atom, arguments, _, _, trail, remainingGoals, _, 
+                         remainingCommands) =>
     if (arguments.isEmpty)
-      Search(remainingGoals, clausesToBePossible(remainingGoals), trail) :: remainingCommands /* 次のゴールへ移る。 */
+      Search(remainingGoals, 
+             clausesToBePossible(remainingGoals), 
+             trail) :: remainingCommands /* 次のゴールへ移る。 */
     else
       throw new RuntimeException("Undefined procedure '%s'.".format(atom.name))
   )
@@ -287,31 +257,38 @@ trait Prolog {
   val CUT = PredefAtom("!", (atom, arguments, _, env, trail, remainingGoals, _, _) => {
     if (arguments.isEmpty)
       // カットの場合、backPointまでスタックを捨て（枝狩り）、次のゴールへ移る。
-      Search(remainingGoals, clausesToBePossible(remainingGoals), trail) :: env.backpoint
+      Search(remainingGoals, 
+             clausesToBePossible(remainingGoals), 
+             trail) :: env.backpoint
     else
       throw new RuntimeException("Undefined procedure '%s'.".format(atom.name))
   })
 
+  private val undefined_op:Atom.Procedure = {
+    case (atom, _, _, _, _, _, _, _) => 
+      throw new RuntimeException("Undefined procedure '%s'.".format(atom.name))
+  }
+
   /** 定義済み述語+ */
-  val ADD = PredefAtom("+", (atom, _, _, _, _, _, _, _) => { throw new RuntimeException("Undefined procedure '%s'.".format(atom.name)) })
+  val ADD = PredefAtom("+", undefined_op)
 
   /** 定義済み述語- */
-  val SUB = PredefAtom("-", (atom, _, _, _, _, _, _, _) => { throw new RuntimeException("Undefined procedure '%s'.".format(atom.name)) })
+  val SUB = PredefAtom("-", undefined_op)
 
   /** 定義済み述語* */
-  val MUL = PredefAtom("*", (atom, _, _, _, _, _, _, _) => { throw new RuntimeException("Undefined procedure '%s'.".format(atom.name)) })
+  val MUL = PredefAtom("*", undefined_op) 
 
   /** 定義済み述語/ */
-  val DIV = PredefAtom("/", (atom, _, _, _, _, _, _, _) => { throw new RuntimeException("Undefined procedure '%s'.".format(atom.name)) })
+  val DIV = PredefAtom("/", undefined_op) 
 
   /** 定義済み述語mod */
-  val MOD = PredefAtom("mod", (atom, _, _, _, _, _, _, _) => { throw new RuntimeException("Undefined procedure '%s'.".format(atom.name)) })
+  val MOD = PredefAtom("mod", undefined_op)
 
   /** 定義済み述語. */
-  val CONS = PredefAtom(".", (atom, _, _, _, _, _, _, _) => { throw new RuntimeException("Undefined procedure '%s'.".format(atom.name)) })
+  val CONS = PredefAtom(".",  undefined_op)
 
   /** 定義済みアトム[] */
-  val EMPTY = PredefAtom("[]", (atom, _, _, _, _, _, _, _) => { throw new RuntimeException("Undefined procedure '%s'.".format(atom.name)) })
+  val EMPTY = PredefAtom("[]",  undefined_op)
 
   /**
    * 環境の代入を適用した項を数式として評価した結果を返す。
@@ -323,9 +300,12 @@ trait Prolog {
    */
   private def calc(term: Term, env: Env): Int = env.dereference(term) match {
     case TermInstance(Num(n), e) => n
-    case TermInstance(Compound(ADD, lhs :: rhs :: Nil), e) => calc(lhs, e) + calc(rhs, e)
-    case TermInstance(Compound(SUB, lhs :: rhs :: Nil), e) => calc(lhs, e) - calc(rhs, e)
-    case TermInstance(Compound(MUL, lhs :: rhs :: Nil), e) => calc(lhs, e) * calc(rhs, e)
+    case TermInstance(Compound(ADD, lhs :: rhs :: Nil), e) =>
+      calc(lhs, e) + calc(rhs, e)
+    case TermInstance(Compound(SUB, lhs :: rhs :: Nil), e) =>
+      calc(lhs, e) - calc(rhs, e)
+    case TermInstance(Compound(MUL, lhs :: rhs :: Nil), e) =>
+      calc(lhs, e) * calc(rhs, e)
     case TermInstance(Compound(DIV, lhs :: rhs :: Nil), e) => {
       val denom = calc(rhs, e)
       if (denom == 0) {
@@ -340,6 +320,7 @@ trait Prolog {
       }
       calc(lhs, e) % denom
     }
-    case TermInstance(t, e) => throw new ArithmeticException("'%s' is not a function.".format(t.toString(e)))
+    case TermInstance(t, e) => 
+      throw new ArithmeticException("'%s' is not a function.".format(t.toString(e)))
   }
 }

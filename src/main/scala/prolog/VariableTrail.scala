@@ -51,13 +51,18 @@ final class VariableTrail(var changedVariables: List[TermInstance]) {
    */
   def rollback(): Unit = {
     def rollback(trail: VariableTrail): Unit = {
-      trail.changedVariables.foreach{ case TermInstance(t, e) => e.delete(t.asInstanceOf[Variable] /* 性能のため... */) }
+      trail.changedVariables.foreach{ case TermInstance(t, e) => 
+        e.delete(t.asInstanceOf[Variable] /* 性能のため... */) 
+      }
       trail.changedVariables = Nil
+
       trail.successor match {
         case None => ;
         case Some(h) =>
           rollback(h)
       }
+      //trail.successor foreach { rollback(_) }
+
     }
     rollback(this)
     successor = None
@@ -67,12 +72,15 @@ final class VariableTrail(var changedVariables: List[TermInstance]) {
     val sb = new StringBuilder
     def toString(trail: VariableTrail): Unit = {
       sb.append('(')
-      sb.append(trail.changedVariables.map{ case TermInstance(t, e) => t.toSignatureString() + "@" + "%x".format(e.hashCode) }.mkString(", "))
+      sb.append(trail.changedVariables.map{ case TermInstance(t, e) => 
+        t.toSignatureString() + "@" + "%x".format(e.hashCode) 
+      }.mkString(", "))
       sb.append(')')
       trail.successor match {
         case None => ;
         case Some(h) => toString(h)
       }
+      //trail.successor foreach { toString(_) }
     }
     toString(this)
     sb.toString

@@ -25,6 +25,8 @@
  */
 package prolog
 
+import collection.mutable.HashMap
+
 /**
  * ホーン節
  *
@@ -39,7 +41,7 @@ abstract class Clause(val head: Term, val body: List[Term], val countOfVariable:
    * @param env 環境
    * @return 本体部の項と環境の組のリスト
    */
-  def getBodyInstance(env: Env): List[TermInstance] = body.map(term => TermInstance(term, env))
+  def getBodyInstance(env: Env): List[TermInstance] =  body.map(TermInstance(_, env))
 }
 
 /**
@@ -55,7 +57,7 @@ object Clause {
    *
    * @return プログラム中で節を一意に特定するID
    */
-  private def getNextClauseId(): Int = { clauseId += 1; clauseId }
+  private def getNextClauseId(): Int = synchronized{ clauseId += 1; clauseId }
 
   /**
    * 節を生成し、返す。
@@ -67,7 +69,7 @@ object Clause {
    */
   def apply(head: Term, body: List[Term]): Clause = {
     // Map[変数, idInClauseが振られた変数]
-    var idInClauseForVar = new scala.collection.mutable.HashMap[Variable, Variable]
+    var idInClauseForVar = new HashMap[Variable, Variable]
     val newHead = head.assignIdInClauseToVar(idInClauseForVar)
     val newBody = body.map{ _.assignIdInClauseToVar(idInClauseForVar) }
     new ClauseImpl(newHead, newBody, idInClauseForVar.size, getNextClauseId())
@@ -81,7 +83,10 @@ object Clause {
    * @param countOfVariable 変数数
    * @param clauseId プログラム中で節を一意に特定するID
    */
-  private class ClauseImpl(head: Term, body: List[Term], countOfVariable: Int, val clauseId: Int) extends Clause(head, body, countOfVariable) {
+  private class ClauseImpl(head: Term, 
+                           body: List[Term], 
+                           countOfVariable: Int, 
+                           val clauseId: Int) extends Clause(head, body, countOfVariable) {
     override def toString(): String = clauseId.toString() + ":" + head.toString() + " :- " + body.mkString("(", ", ", ")")
   }
 
@@ -91,8 +96,6 @@ object Clause {
    * @param goals ゴール
    * @return 先頭のゴールと単一化できる可能性のある節
    */
-  def clausesToBePossible(goals: List[TermInstance]): List[Clause] = goals match {
-    case Nil => Nil
-    case _ => goals.head.term.clauses
-  }
+  def clausesToBePossible(goals: List[TermInstance]): List[Clause] = 
+    goals.headOption.map{_.term.clauses} getOrElse Nil
 }

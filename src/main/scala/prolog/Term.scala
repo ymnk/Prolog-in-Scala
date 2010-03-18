@@ -25,6 +25,7 @@
  */
 package prolog
 
+import collection.mutable.Map
 import error._
 
 /**
@@ -125,7 +126,7 @@ sealed abstract class Term {
    *
    * @param idInClauseForVar Map[変数, idInClauseを振った変数]。キーにない変数が現れた場合、その変数のidInClauseに0からの連番を振った変数を生成し、idInClauseForVarにその情報を追加する。
    */
-  def assignIdInClauseToVar(idInClauseForVar: scala.collection.mutable.Map[Variable, Variable]): Term
+  def assignIdInClauseToVar(idInClauseForVar: Map[Variable, Variable]): Term
 
   /**
    * この項をゴールとして処理する。
@@ -253,7 +254,9 @@ object Term {
     if (unifyTerm(term1, env1, term2, env2)) {
       (true, changedVariables)
     } else {
-      changedVariables.foreach{ case TermInstance(t, e) => e.delete(t.asInstanceOf[Variable] /* 性能のため... */) }
+      changedVariables.foreach{ case TermInstance(t, e) => 
+        e.delete(t.asInstanceOf[Variable] /* 性能のため... */) 
+      }
       (false, Nil)
     }
   }
@@ -369,7 +372,7 @@ object Var {
    * @param id プログラム中で変数を一意に特定するID
    */
   private final class VariableImpl(name: Option[String], id: Int) extends Variable(name, id, UNDEFINED_ID) {
-    override def assignIdInClauseToVar(idInClauseForVar: scala.collection.mutable.Map[Variable, Variable]): Term = {
+    override def assignIdInClauseToVar(idInClauseForVar: Map[Variable, Variable]): Term = {
       idInClauseForVar.getOrElse(this, {
           val idInClause = idInClauseForVar.size
           val varWithIdInClause = new VariableInClauseImpl(this, idInClause)
@@ -389,7 +392,7 @@ object Var {
    * @param idInClause 節内で変数を一意に特定するID
    */
   private final class VariableInClauseImpl(variable: Variable, idInClause: Int) extends Variable(variable.name, variable.id, idInClause) {
-    override def assignIdInClauseToVar(idInClauseForVar: scala.collection.mutable.Map[Variable, Variable]): Term = this
+    override def assignIdInClauseToVar(idInClauseForVar: Map[Variable, Variable]): Term = this
     override def toString(): String = name.getOrElse("_" + id)
   }
 }
@@ -437,6 +440,8 @@ abstract case class Atom(name: String) extends Term {
  * アトムや関数子
  */
 object Atom {
+
+  type Procedure = (PredefAtom, List[Term], List[TermInstance], Env, VariableTrail, List[TermInstance], List[Clause], List[Command]) => List[Command]
   /**
    * アトムや関数子を返す。
    * contextに同名のオブジェクトがある場合は、それを返す。
@@ -560,7 +565,7 @@ abstract class PostdefAtom(name: String) extends Atom(name) {
     unify(goals, env, trail, remainingGoals, remainingClauses, remainingCommands)
   }
 
-  override def assignIdInClauseToVar(idInClauseForVar: scala.collection.mutable.Map[Variable, Variable]): Term = this
+  override def assignIdInClauseToVar(idInClauseForVar: Map[Variable, Variable]): Term = this
 
   /**
    * ユーザにより定義された関数子に属する複合項
@@ -574,7 +579,7 @@ abstract class PostdefAtom(name: String) extends Atom(name) {
                          remainingClauses: List[Clause], remainingCommands: List[Command]): List[Command] = {
       unify(goals, env, trail, remainingGoals, remainingClauses, remainingCommands)
     }
-    override def assignIdInClauseToVar(idInClauseForVar: scala.collection.mutable.Map[Variable, Variable]): Term = {
+    override def assignIdInClauseToVar(idInClauseForVar: Map[Variable, Variable]): Term = {
       new PostdefCompoundImpl(functor, terms.map{ _.assignIdInClauseToVar(idInClauseForVar) })
     }
   }
@@ -587,7 +592,8 @@ abstract class PostdefAtom(name: String) extends Atom(name) {
  * @param procedure 評価処理
  */
 abstract class PredefAtom(name: String,
-    val procedure: (PredefAtom, List[Term], List[TermInstance], Env, VariableTrail, List[TermInstance], List[Clause], List[Command]) => List[Command]
+//    val procedure: (PredefAtom, List[Term], List[TermInstance], Env, VariableTrail, List[TermInstance], List[Clause], List[Command]) => List[Command]
+    val procedure: Atom.Procedure
     ) extends Atom(name) {
   /**
    * このアトムや関数子を返す。
@@ -638,7 +644,7 @@ object PredefAtom {
    * @throws IllegalArgumentException 既に組み込みのアトムや関数子にある名称の場合
    */
   def apply(name: String,
-      procedure: (PredefAtom, List[Term], List[TermInstance], Env, VariableTrail, List[TermInstance], List[Clause], List[Command]) => List[Command]
+      procedure: Atom.Procedure
       ): PredefAtom = {
     if (predefAtomForName.contains(name)) {
       throw new IllegalArgumentException("Cannot overload procedure '%s'.".format(name))
@@ -655,7 +661,7 @@ object PredefAtom {
    * @param procedure 評価処理
    */
   private final class PredefAtomImpl(name: String,
-        procedure: (PredefAtom, List[Term], List[TermInstance], Env, VariableTrail, List[TermInstance], List[Clause], List[Command]) => List[Command]
+        procedure: Atom.Procedure
         ) extends PredefAtom(name, procedure) {
     override def clauses(): List[Clause] = Nil
     override def apply(): PredefAtom = this
@@ -664,7 +670,7 @@ object PredefAtom {
                          remainingClauses: List[Clause], remainingCommands: List[Command]): List[Command] = {
       procedure(this, Nil, goals, env, trail, remainingGoals, remainingClauses, remainingCommands)
     }
-    override def assignIdInClauseToVar(idInClauseForVar: scala.collection.mutable.Map[Variable, Variable]): Term = this
+    override def assignIdInClauseToVar(idInClauseForVar: Map[Variable, Variable]): Term = this
   }
 
   /**
@@ -679,7 +685,7 @@ object PredefAtom {
                          remainingClauses: List[Clause], remainingCommands: List[Command]): List[Command] = {
       functor.procedure(functor, terms, goals, env, trail, remainingGoals, remainingClauses, remainingCommands)
     }
-    override def assignIdInClauseToVar(idInClauseForVar: scala.collection.mutable.Map[Variable, Variable]): Term = {
+    override def assignIdInClauseToVar(idInClauseForVar: Map[Variable, Variable]): Term = {
       new PredefCompoundImpl(functor, terms.map{ _.assignIdInClauseToVar(idInClauseForVar) })
     }
   }
@@ -699,5 +705,5 @@ case class Num(number: Int) extends Term {
                        remainingClauses: List[Clause], remainingCommands: List[Command]): List[Command] = {
     throw new RuntimeException("Callable expected, but was '%s'.".format(this.toString))
   }
-  override def assignIdInClauseToVar(idInClauseForVar: scala.collection.mutable.Map[Variable, Variable]): Term = this
+  override def assignIdInClauseToVar(idInClauseForVar: Map[Variable, Variable]): Term = this
 }
